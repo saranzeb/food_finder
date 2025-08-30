@@ -1,68 +1,346 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, collection, query, onSnapshot, addDoc, getDocs } from 'firebase/firestore';
 
-const App = () => {
-  // State for the main food category selected by the user.
-  const [selectedCategory, setSelectedCategory] = useState(null);
-  // State for the specific sub-category selected by the user.
-  const [selectedSubcategory, setSelectedSubcategory] = useState(null);
-  // State to hold the final search results (restaurant links).
-  const [results, setResults] = useState([]);
+// --- Global Firebase and API Configuration ---
+// The __app_id and __firebase_config are provided by the environment.
+const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const appId = rawAppId.split('/')[0];
 
-  // The new, two-layer data structure.
-  // The top-level keys are broad categories.
-  // The nested objects contain more specific sub-categories and their associated restaurant links.
-  const foodDatabase = {
-    'Fried Chicken': {
-      'Spicy Chicken Sandwich': [
-        { name: 'Popeyes Spicy Chicken Sandwich', url: 'https://www.popeyes.com/spicy-chicken-sandwich' },
-        { name: 'KFC Spicy Famous Bowl', url: 'https://www.kfc.com/menu/bowls/spicy-famous-bowl' },
-        { name: 'Chick-fil-A Spicy Deluxe Sandwich', url: 'https://www.chick-fil-a.com/spicy-deluxe-sandwich' },
-      ],
-      'Combo Meal': [
-        { name: 'KFC 8 pc. Meal', url: 'https://www.kfc.com/menu/big-box-meals/8-pc-meal' },
-        { name: 'Raising Cane\'s Box Combo', url: 'https://www.raisingcanes.com/menu' },
-        { name: 'Popeyes Family Meal', url: 'https://www.popeyes.com/family-meals' },
-      ],
+// FOR LOCAL DEVELOPMENT: Paste your own Firebase config here.
+// You can find this in your Firebase project settings under "Project settings" > "Your apps".
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_AUTH_DOMAIN",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_STORAGE_BUCKET",
+  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  appId: "YOUR_APP_ID",
+};
+
+// For API calls, provide your API key below.
+const apiKey = "";
+
+// --- Firebase and API Helper Functions ---
+const initializeFirebase = () => {
+  return new Promise((resolve, reject) => {
+    try {
+      const app = initializeApp(firebaseConfig);
+      const db = getFirestore(app);
+      const auth = getAuth(app);
+
+      onAuthStateChanged(auth, (user) => {
+        if (user) {
+          console.log('User is signed in:', user.uid);
+          resolve(db);
+        } else {
+          const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+          if (initialAuthToken) {
+            signInWithCustomToken(auth, initialAuthToken)
+              .then(() => resolve(db))
+              .catch((error) => {
+                console.error('Error signing in with custom token:', error);
+                signInAnonymously(auth).then(() => resolve(db)).catch(reject);
+              });
+          } else {
+            signInAnonymously(auth)
+              .then(() => resolve(db))
+              .catch(reject);
+          }
+        }
+      });
+    } catch (e) {
+      console.error('Error initializing Firebase:', e);
+      reject(e);
+    }
+  });
+};
+
+const getFoodData = (db, setFoodDatabase, setError) => {
+  if (!db) return;
+  const foodRef = collection(db, `/artifacts/${appId}/public/data/food_items`);
+  const q = query(foodRef);
+  const unsubscribe = onSnapshot(q, (querySnapshot) => {
+    const data = {};
+    querySnapshot.forEach((doc) => {
+      const item = doc.data();
+      const category = item.category;
+      const subcategory = item.subcategory;
+
+      if (!data[category]) {
+        data[category] = {};
+      }
+      if (!data[category][subcategory]) {
+        data[category][subcategory] = [];
+      }
+      data[category][subcategory].push({
+        name: item.name,
+        url: item.url
+      });
+    });
+    setFoodDatabase(data);
+    console.log("Database synced successfully.");
+  }, (err) => {
+    console.error("Error fetching Firestore data:", err);
+    setError("Failed to fetch food data. Please check your network connection.");
+  });
+
+  return unsubscribe;
+};
+
+const addFoodData = async (db, setIsLoading, setError, setMessage) => {
+  if (!db) {
+    setError("Database not ready. Please refresh the page.");
+    return;
+  }
+  setIsLoading(true);
+  setError(null);
+  setMessage("");
+
+  const foodRef = collection(db, `/artifacts/${appId}/public/data/food_items`);
+
+  const foodItemsToAdd = [
+    { category: "Burgers", subcategory: "Cheeseburger", name: "In-N-Out Cheeseburger", url: "https://www.in-n-out.com/menu" },
+    { category: "Burgers", subcategory: "Cheeseburger", name: "McDonald's Quarter Pounder with Cheese", url: "https://www.mcdonalds.com/us/en-us/product/quarter-pounder-with-cheese" },
+    { category: "Burgers", subcategory: "Classic Burger", name: "Five Guys Hamburger", url: "https://www.fiveguys.com/menu/burgers" },
+    { category: "Burgers", subcategory: "Veggie Burger", name: "Burger King Impossible Whopper", url: "https://www.bk.com/menu-items/impossible-whopper" },
+    { category: "Pizza", subcategory: "Pepperoni", name: "Domino's Pepperoni Pizza", url: "https://www.dominos.com/en/pages/menu/pizza/" },
+    { category: "Pizza", subcategory: "Margherita", name: "Pizza Hut Margherita", url: "https://www.pizzahut.com/c/pizza/margherita" },
+    { category: "Pizza", subcategory: "Supreme", name: "Papa John's The Works", url: "https://www.papajohns.com/order/menu/pizza/the-works" },
+    { category: "Pizza", subcategory: "Hawaiian", name: "Little Caesars Hawaiian Pizza", url: "https://littlecaesars.com/en-us/our-menu/pizzas/hawaiian/" },
+    { category: "Tacos", subcategory: "Beef Tacos", name: "Taco Bell Crunchy Taco Supreme", url: "https://www.tacobell.com/food/tacos" },
+    { category: "Tacos", subcategory: "Fish Tacos", name: "Rubio's Classic Fish Taco", url: "https://www.rubios.com/menu/classic-tacos/classic-fish-taco" },
+    { category: "Tacos", subcategory: "Chicken Tacos", name: "Chipotle Chicken Tacos", url: "https://www.chipotle.com/menu/tacos" },
+    { category: "Chicken", subcategory: "Fried Chicken", name: "KFC Original Recipe Chicken", url: "https://www.kfc.com/menu/chicken/original-recipe-chicken" },
+    { category: "Chicken", subcategory: "Fried Chicken", name: "Popeyes Louisiana Chicken", url: "https://www.popeyes.com/menu/fried-chicken" },
+    { category: "Chicken", subcategory: "Chicken Sandwich", name: "Chick-fil-A Chicken Sandwich", url: "https://www.chick-fil-a.com/menu/chick-fil-a-chicken-sandwich" },
+    { category: "Salads", subcategory: "Caesar Salad", name: "Sweetgreen Caesar Salad", url: "https://www.sweetgreen.com/menu/salads/caesar-salad" },
+    { category: "Salads", subcategory: "Cobb Salad", name: "Panera Bread Green Goddess Cobb Salad", url: "https://www.panerabread.com/en-us/menu/food/salads/green-goddess-cob-salad.html" },
+    { category: "Desserts", subcategory: "Ice Cream", name: "Cold Stone Creamery", url: "https://www.coldstonecreamery.com/menu/icecream.html" },
+    { category: "Desserts", subcategory: "Cookies", name: "Crumbl Cookies", url: "https://crumblcookies.com/menu" },
+    { category: "Breakfast", subcategory: "Pancakes", name: "IHOP Buttermilk Pancakes", url: "https://www.ihop.com/en/menu/pancakes" },
+    { category: "Breakfast", subcategory: "Breakfast Burrito", name: "Taco Bell Toasted Breakfast Burrito", url: "https://www.tacobell.com/food/breakfast/toasted-breakfast-burrito" },
+  ];
+
+  try {
+    for (const item of foodItemsToAdd) {
+      await addDoc(foodRef, item);
+    }
+    setMessage("Sample food data added successfully!");
+  } catch (e) {
+    console.error("Error adding document: ", e);
+    setError("Failed to add sample data. Please check your network and Firebase permissions.");
+  } finally {
+    setIsLoading(false);
+  }
+};
+
+const getSubcategoriesFromLLM = async (category) => {
+  const userPrompt = `Generate a JSON array of 5 specific subcategories for the following food category: "${category}". The subcategories should be broad and common types of food within that category. For example, for "Mexican", you might give "Tacos" and "Burritos". Respond with a JSON array of strings, where each string is a subcategory.`;
+  
+  const payload = {
+    contents: [{ parts: [{ text: userPrompt }] }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "ARRAY",
+        items: { "type": "STRING" }
+      }
     },
-    'Burgers': {
-      'Two-Layer Burger': [
-        { name: 'McDonald\'s Big Mac', url: 'https://www.mcdonalds.com/us/en-us/product/big-mac' },
-        { name: 'Burger King Big King', url: 'https://www.bk.com/menu-items/big-king' },
-        { name: 'Wendy\'s Big Bacon Cheddar Cheeseburger', url: 'https://www.wendys.com/big-bacon-cheddar-cheeseburger' },
-      ],
-      'Classic Burger': [
-        { name: 'McDonald\'s Quarter Pounder', url: 'https://www.mcdonalds.com/us/en-us/product/quarter-pounder-with-cheese' },
-        { name: 'Five Guys Hamburger', url: 'https://www.fiveguys.com/menu/burgers' },
-      ],
-    },
-    'Healthy & Salad': {
-      'Salad': [
-        { name: 'Sweetgreen Salads', url: 'https://www.sweetgreen.com/menu/salads' },
-        { name: 'Chipotle Salad Bowls', url: 'https://www.chipotle.com/menu/salads' },
-        { name: 'Panera Bread Salads', url: 'https://www.panerabread.com/menu/salads' },
-      ],
-      'Healthy Bowl': [
-        { name: 'Sweetgreen Warm Bowls', url: 'https://www.sweetgreen.com/menu/warm-bowls' },
-        { name: 'Chipotle Burrito Bowls', url: 'https://www.chipotle.com/menu/burrito-bowls' },
-      ],
-    },
+    model: "gemini-2.5-flash-preview-05-20"
   };
 
-  // Function to handle the top-level category button click
+  const maxRetries = 3;
+  let retryCount = 0;
+  let apiResponse;
+
+  while (retryCount < maxRetries) {
+    try {
+      apiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (apiResponse.ok) {
+        break;
+      } else {
+        throw new Error(`API returned status ${apiResponse.status}`);
+      }
+    } catch (err) {
+      retryCount++;
+      if (retryCount >= maxRetries) {
+        throw err;
+      }
+      await new Promise(res => setTimeout(res, Math.pow(2, retryCount) * 1000));
+    }
+  }
+
+  const result = await apiResponse.json();
+  const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+  
+  if (!jsonText) {
+    throw new Error('No subcategories could be generated.');
+  }
+
+  return JSON.parse(jsonText);
+};
+
+// --- React Component ---
+const App = () => {
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [selectedSubcategory, setSelectedSubcategory] = useState(null);
+  const [results, setResults] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [message, setMessage] = useState('');
+  const [manualCategory, setManualCategory] = useState('');
+  const [foodDatabase, setFoodDatabase] = useState({});
+  const [db, setDb] = useState(null);
+  const [isDbReady, setIsDbReady] = useState(false);
+
+  useEffect(() => {
+    const initialize = async () => {
+      try {
+        const firebaseDb = await initializeFirebase();
+        setDb(firebaseDb);
+        setIsDbReady(true);
+      } catch (e) {
+        console.error('Error initializing Firebase:', e);
+        setError('Failed to initialize Firebase. Please check your configuration.');
+      }
+    };
+    initialize();
+  }, []);
+
+  useEffect(() => {
+    if (db && isDbReady) {
+      const unsubscribe = getFoodData(db, setFoodDatabase, setError);
+      return () => unsubscribe();
+    }
+  }, [db, isDbReady]);
+
   const handleCategoryClick = (category) => {
     setSelectedCategory(category);
-    // Reset the subcategory and results when a new category is selected
     setSelectedSubcategory(null);
     setResults([]);
   };
 
-  // Function to handle the specific sub-category button click
-  const handleSubcategoryClick = (subcategory) => {
+  const handleSubcategoryClick = async (subcategory) => {
     setSelectedSubcategory(subcategory);
-    // Get the results from the nested data structure
-    setResults(foodDatabase[selectedCategory][subcategory]);
+    setIsLoading(true);
+    setError(null);
+    setMessage('');
+
+    const manualResults = foodDatabase[selectedCategory]?.[subcategory] || [];
+
+    if (manualResults.length > 0) {
+      setResults(manualResults);
+      setIsLoading(false);
+      return;
+    }
+    
+    try {
+      const userPrompt = `Find popular fast-food restaurants that serve "${subcategory}" food. Provide the restaurant name and a direct link to the menu page for that specific item. Respond with a JSON array of objects, where each object has a 'name' (string) and 'url' (string). Provide at least 3, but no more than 5 results.`;
+      
+      const payload = {
+        contents: [{ parts: [{ text: userPrompt }] }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                "name": { "type": "STRING" },
+                "url": { "type": "STRING" }
+              }
+            }
+          }
+        },
+        model: "gemini-2.5-flash-preview-05-20"
+      };
+
+      const maxRetries = 3;
+      let retryCount = 0;
+      let apiResponse;
+      while (retryCount < maxRetries) {
+        try {
+          apiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          if (apiResponse.ok) {
+            break;
+          } else {
+            throw new Error(`API returned status ${apiResponse.status}`);
+          }
+        } catch (err) {
+          retryCount++;
+          if (retryCount >= maxRetries) {
+            throw err;
+          }
+          await new Promise(res => setTimeout(res, Math.pow(2, retryCount) * 1000));
+        }
+      }
+
+      const result = await apiResponse.json();
+      const candidate = result.candidates?.[0];
+      const jsonText = candidate?.content?.parts?.[0]?.text;
+      
+      if (!jsonText) {
+        setMessage('No results found for this search. Please try another option.');
+        setResults([]);
+        return;
+      }
+      
+      const parsedResults = JSON.parse(jsonText);
+      setResults(parsedResults);
+
+    } catch (e) {
+      console.error('Error fetching from LLM API:', e);
+      setError('Failed to get results from the search engine. Please try again later.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
+  const handleManualInput = async () => {
+    if (!manualCategory.trim()) {
+      setError("Please enter a food category.");
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    setMessage('');
+    
+    try {
+        const subcategories = await getSubcategoriesFromLLM(manualCategory);
+        const newDbEntry = {};
+        newDbEntry[manualCategory] = {};
+        
+        for (const sub of subcategories) {
+            newDbEntry[manualCategory][sub] = [];
+        }
+
+        setFoodDatabase(prevDb => ({
+            ...prevDb,
+            ...newDbEntry
+        }));
+        setSelectedCategory(manualCategory);
+        setMessage(`Found options for "${manualCategory}". Please select a subcategory.`);
+    } catch (e) {
+        setError("Failed to generate options. Please try a different category or try again later.");
+        console.error(e);
+    } finally {
+        setIsLoading(false);
+    }
+  };
+
+  // --- UI Rendering with Tailwind CSS ---
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-green-50 to-blue-50 p-4 font-sans text-gray-800">
       <div className="w-full max-w-2xl bg-white shadow-xl rounded-2xl p-8">
@@ -72,6 +350,38 @@ const App = () => {
         <p className="text-center text-lg text-gray-600 mb-8">
           Find what you're craving in two easy steps.
         </p>
+
+        {/* Button to add sample data */}
+        <div className="flex justify-center mb-8">
+          <button
+            onClick={() => addFoodData(db, setIsLoading, setError, setMessage)}
+            disabled={isLoading}
+            className="px-6 py-3 font-semibold rounded-full shadow-md transition-all duration-300 transform hover:scale-105 bg-purple-500 text-white hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isLoading ? "Adding Data..." : "Initialize Database"}
+          </button>
+        </div>
+
+        {/* Manual Input Section */}
+        <div className="mb-8">
+          <h2 className="text-2xl font-bold text-gray-700 mb-4 text-center">Or enter your own category:</h2>
+          <div className="flex justify-center gap-4">
+            <input
+              type="text"
+              value={manualCategory}
+              onChange={(e) => setManualCategory(e.target.value)}
+              placeholder="e.g., 'Desserts'"
+              className="w-full max-w-sm px-4 py-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              onClick={handleManualInput}
+              disabled={isLoading || !manualCategory.trim()}
+              className="px-6 py-3 font-semibold rounded-full shadow-md transition-all duration-300 transform hover:scale-105 bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Generate
+            </button>
+          </div>
+        </div>
 
         {/* Step 1: Select a main category */}
         <div className="mb-8">
@@ -112,6 +422,23 @@ const App = () => {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Loading and Error/Message Displays */}
+        {isLoading && (
+          <div className="text-center text-lg text-gray-600 mt-8">
+            <p>Searching for options... hang tight! This may take a moment.</p>
+          </div>
+        )}
+        {error && (
+          <div className="text-center text-red-500 font-semibold mt-8">
+            <p>{error}</p>
+          </div>
+        )}
+        {!isLoading && message && (
+          <div className="text-center text-gray-500 italic mt-8">
+            <p>{message}</p>
           </div>
         )}
 
