@@ -30,6 +30,7 @@ const firebaseConfig = {
   measurementId: "G-VSGFWQT671"
 };
 
+
 // For API calls, provide your API key below.
 const apiKey = "";
 
