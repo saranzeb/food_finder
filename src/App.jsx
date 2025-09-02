@@ -4,19 +4,30 @@ import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken }
 import { getFirestore, collection, query, onSnapshot, addDoc, getDocs } from 'firebase/firestore';
 
 // --- Global Firebase and API Configuration ---
-// The __app_id and __firebase_config are provided by the environment.
+// The __app_id is provided by the environment.
 const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const appId = rawAppId.split('/')[0];
 
-// FOR LOCAL DEVELOPMENT: Paste your own Firebase config here.
+// FOR DEPLOYMENT: Replace the placeholder values below with your own Firebase config.
 // You can find this in your Firebase project settings under "Project settings" > "Your apps".
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_AUTH_DOMAIN",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_STORAGE_BUCKET",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID",
+//const firebaseConfig = {
+  //apiKey: "YOUR_API_KEY",
+  //authDomain: "YOUR_AUTH_DOMAIN",
+  //projectId: "YOUR_PROJECT_ID",
+  //storageBucket: "YOUR_STORAGE_BUCKET",
+  //messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  //appId: "YOUR_APP_ID",
+//};
+
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCcKyulzpjHfDfWdS_9x6eQxq4v9pweqbs",
+  authDomain: "food-47696.firebaseapp.com",
+  projectId: "food-47696",
+  storageBucket: "food-47696.firebasestorage.app",
+  messagingSenderId: "234381908469",
+  appId: "1:234381908469:web:42b73cddf81194d860e8bc",
+  measurementId: "G-VSGFWQT671"
 };
 
 // For API calls, provide your API key below.
