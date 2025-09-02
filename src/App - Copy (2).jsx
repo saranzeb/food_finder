@@ -8,22 +8,38 @@ import { getFirestore, collection, query, onSnapshot, addDoc, getDocs } from 'fi
 const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const appId = rawAppId.split('/')[0];
 
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-  apiKey: "local-dev-key",
-  authDomain: "local-dev-domain",
-  projectId: "local-dev-project"
+// FOR DEPLOYMENT: Replace the placeholder values below with your own Firebase config.
+// You can find this in your Firebase project settings under "Project settings" > "Your apps".
+//const firebaseConfig = {
+  //apiKey: "YOUR_API_KEY",
+  //authDomain: "YOUR_AUTH_DOMAIN",
+  //projectId: "YOUR_PROJECT_ID",
+  //storageBucket: "YOUR_STORAGE_BUCKET",
+  //messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  //appId: "YOUR_APP_ID",
+//};
+
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCcKyulzpjHfDfWdS_9x6eQxq4v9pweqbs",
+  authDomain: "food-47696.firebaseapp.com",
+  projectId: "food-47696",
+  storageBucket: "food-47696.firebasestorage.app",
+  messagingSenderId: "234381908469",
+  appId: "1:234381908469:web:42b73cddf81194d860e8bc",
+  measurementId: "G-VSGFWQT671"
 };
 
-// This API key is used for the LLM API call. It is provided by the environment.
+
+// For API calls, provide your API key below.
 const apiKey = "";
 
-let db = null;
-
+// --- Firebase and API Helper Functions ---
 const initializeFirebase = () => {
   return new Promise((resolve, reject) => {
     try {
       const app = initializeApp(firebaseConfig);
-      db = getFirestore(app);
+      const db = getFirestore(app);
       const auth = getAuth(app);
 
       onAuthStateChanged(auth, (user) => {
@@ -120,15 +136,10 @@ const addFoodData = async (db, setIsLoading, setError, setMessage) => {
   ];
 
   try {
-    const existingDocs = await getDocs(foodRef);
-    if (existingDocs.empty) {
-      for (const item of foodItemsToAdd) {
-        await addDoc(foodRef, item);
-      }
-      setMessage("Sample food data added successfully!");
-    } else {
-      setMessage("Database is already populated. Skipping data addition.");
+    for (const item of foodItemsToAdd) {
+      await addDoc(foodRef, item);
     }
+    setMessage("Sample food data added successfully!");
   } catch (e) {
     console.error("Error adding document: ", e);
     setError("Failed to add sample data. Please check your network and Firebase permissions.");
@@ -137,7 +148,7 @@ const addFoodData = async (db, setIsLoading, setError, setMessage) => {
   }
 };
 
-export const getSubcategoriesFromLLM = async (category) => {
+const getSubcategoriesFromLLM = async (category) => {
   const userPrompt = `Generate a JSON array of 5 specific subcategories for the following food category: "${category}". The subcategories should be broad and common types of food within that category. For example, for "Mexican", you might give "Tacos" and "Burritos". Respond with a JSON array of strings, where each string is a subcategory.`;
   
   const payload = {
@@ -188,78 +199,160 @@ export const getSubcategoriesFromLLM = async (category) => {
   return JSON.parse(jsonText);
 };
 
+// --- React Component ---
 const App = () => {
-  const [db, setDb] = useState(null);
-  const [foodDatabase, setFoodDatabase] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [selectedSubcategory, setSelectedSubcategory] = useState(null);
   const [results, setResults] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [message, setMessage] = useState(null);
+  const [message, setMessage] = useState('');
+  const [manualCategory, setManualCategory] = useState('');
+  const [foodDatabase, setFoodDatabase] = useState({});
+  const [db, setDb] = useState(null);
+  const [isDbReady, setIsDbReady] = useState(false);
 
   useEffect(() => {
-    initializeFirebase()
-      .then(setDb)
-      .catch((e) => {
-        setError("Firebase initialization failed. Check your project settings.");
-        console.error("Firebase init error: ", e);
-      });
+    const initialize = async () => {
+      try {
+        const firebaseDb = await initializeFirebase();
+        setDb(firebaseDb);
+        setIsDbReady(true);
+      } catch (e) {
+        console.error('Error initializing Firebase:', e);
+        setError('Failed to initialize Firebase. Please check your configuration.');
+      }
+    };
+    initialize();
   }, []);
 
   useEffect(() => {
-    if (!db) return;
-    const unsubscribe = getFoodData(db, setFoodDatabase, setError);
-    return () => unsubscribe();
-  }, [db]);
-
-  const handleCategoryClick = async (category) => {
-    if (!db) {
-      setError("Database not ready. Please wait a moment.");
-      return;
+    if (db && isDbReady) {
+      const unsubscribe = getFoodData(db, setFoodDatabase, setError);
+      return () => unsubscribe();
     }
-    
+  }, [db, isDbReady]);
+
+  const handleCategoryClick = (category) => {
     setSelectedCategory(category);
     setSelectedSubcategory(null);
     setResults([]);
-    setError(null);
-    setMessage(null);
-    setIsLoading(true);
+  };
 
+  const handleSubcategoryClick = async (subcategory) => {
+    setSelectedSubcategory(subcategory);
+    setIsLoading(true);
+    setError(null);
+    setMessage('');
+
+    const manualResults = foodDatabase[selectedCategory]?.[subcategory] || [];
+
+    if (manualResults.length > 0) {
+      setResults(manualResults);
+      setIsLoading(false);
+      return;
+    }
+    
     try {
-      const subcategories = await getSubcategoriesFromLLM(category);
-      // To simulate the two-layer structure for display purposes, we need to
-      // merge the LLM's new subcategories with the existing data.
-      const updatedDatabase = { ...foodDatabase,
-        [category]: { ...foodDatabase[category]
-        }
+      const userPrompt = `Find popular fast-food restaurants that serve "${subcategory}" food. Provide the restaurant name and a direct link to the menu page for that specific item. Respond with a JSON array of objects, where each object has a 'name' (string) and 'url' (string). Provide at least 3, but no more than 5 results.`;
+      
+      const payload = {
+        contents: [{ parts: [{ text: userPrompt }] }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                "name": { "type": "STRING" },
+                "url": { "type": "STRING" }
+              }
+            }
+          }
+        },
+        model: "gemini-2.5-flash-preview-05-20"
       };
 
-      for (const subcategory of subcategories) {
-        if (!updatedDatabase[category][subcategory]) {
-          updatedDatabase[category][subcategory] = [];
+      const maxRetries = 3;
+      let retryCount = 0;
+      let apiResponse;
+      while (retryCount < maxRetries) {
+        try {
+          apiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          if (apiResponse.ok) {
+            break;
+          } else {
+            throw new Error(`API returned status ${apiResponse.status}`);
+          }
+        } catch (err) {
+          retryCount++;
+          if (retryCount >= maxRetries) {
+            throw err;
+          }
+          await new Promise(res => setTimeout(res, Math.pow(2, retryCount) * 1000));
         }
       }
+
+      const result = await apiResponse.json();
+      const candidate = result.candidates?.[0];
+      const jsonText = candidate?.content?.parts?.[0]?.text;
       
-      setFoodDatabase(updatedDatabase);
+      if (!jsonText) {
+        setMessage('No results found for this search. Please try another option.');
+        setResults([]);
+        return;
+      }
+      
+      const parsedResults = JSON.parse(jsonText);
+      setResults(parsedResults);
+
     } catch (e) {
-      console.error("Error generating subcategories:", e);
-      setError("Could not generate subcategories. Please try again.");
+      console.error('Error fetching from LLM API:', e);
+      setError('Failed to get results from the search engine. Please try again later.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleSubcategoryClick = (subcategory) => {
-    setSelectedSubcategory(subcategory);
-    const links = foodDatabase[selectedCategory][subcategory] || [];
-    setResults(links);
-  };
-  
-  const handleAddDataClick = async () => {
-    await addFoodData(db, setIsLoading, setError, setMessage);
+  const handleManualInput = async () => {
+    if (!manualCategory.trim()) {
+      setError("Please enter a food category.");
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    setMessage('');
+    
+    try {
+        const subcategories = await getSubcategoriesFromLLM(manualCategory);
+        const newDbEntry = {};
+        newDbEntry[manualCategory] = {};
+        
+        for (const sub of subcategories) {
+            newDbEntry[manualCategory][sub] = [];
+        }
+
+        setFoodDatabase(prevDb => ({
+            ...prevDb,
+            ...newDbEntry
+        }));
+        setSelectedCategory(manualCategory);
+        setMessage(`Found options for "${manualCategory}". Please select a subcategory.`);
+    } catch (e) {
+        setError("Failed to generate options. Please try a different category or try again later.");
+        console.error(e);
+    } finally {
+        setIsLoading(false);
+    }
   };
 
+  // --- UI Rendering with Tailwind CSS ---
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-green-50 to-blue-50 p-4 font-sans text-gray-800">
       <div className="w-full max-w-2xl bg-white shadow-xl rounded-2xl p-8">
@@ -270,24 +363,43 @@ const App = () => {
           Find what you're craving in two easy steps.
         </p>
 
-        {/* Add Sample Data Button */}
-        <div className="text-center mb-6">
+        {/* Button to add sample data */}
+        <div className="flex justify-center mb-8">
           <button
-            onClick={handleAddDataClick}
+            onClick={() => addFoodData(db, setIsLoading, setError, setMessage)}
             disabled={isLoading}
-            className={`px-8 py-3 font-bold rounded-full shadow-md transition-all duration-300 transform
-                        ${isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 text-white hover:bg-blue-600 hover:scale-105'}
-                        `}
+            className="px-6 py-3 font-semibold rounded-full shadow-md transition-all duration-300 transform hover:scale-105 bg-purple-500 text-white hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isLoading ? 'Adding Data...' : 'Add Sample Food Data'}
+            {isLoading ? "Adding Data..." : "Initialize Database"}
           </button>
+        </div>
+
+        {/* Manual Input Section */}
+        <div className="mb-8">
+          <h2 className="text-2xl font-bold text-gray-700 mb-4 text-center">Or enter your own category:</h2>
+          <div className="flex justify-center gap-4">
+            <input
+              type="text"
+              value={manualCategory}
+              onChange={(e) => setManualCategory(e.target.value)}
+              placeholder="e.g., 'Desserts'"
+              className="w-full max-w-sm px-4 py-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              onClick={handleManualInput}
+              disabled={isLoading || !manualCategory.trim()}
+              className="px-6 py-3 font-semibold rounded-full shadow-md transition-all duration-300 transform hover:scale-105 bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Generate
+            </button>
+          </div>
         </div>
 
         {/* Step 1: Select a main category */}
         <div className="mb-8">
           <h2 className="text-2xl font-bold text-gray-700 mb-4 text-center">Step 1: Choose a main food type</h2>
           <div className="flex flex-wrap justify-center gap-4">
-            {foodDatabase && Object.keys(foodDatabase).map((category) => (
+            {Object.keys(foodDatabase).map((category) => (
               <button
                 key={category}
                 onClick={() => handleCategoryClick(category)}
@@ -304,7 +416,7 @@ const App = () => {
         </div>
 
         {/* Step 2: Select a specific option (only visible after Step 1) */}
-        {selectedCategory && foodDatabase && foodDatabase[selectedCategory] && (
+        {selectedCategory && (
           <div className="mb-8">
             <h2 className="text-2xl font-bold text-gray-700 mb-4 text-center">Step 2: Be more specific</h2>
             <div className="flex flex-wrap justify-center gap-4">
@@ -324,19 +436,18 @@ const App = () => {
             </div>
           </div>
         )}
-        
+
+        {/* Loading and Error/Message Displays */}
         {isLoading && (
           <div className="text-center text-lg text-gray-600 mt-8">
             <p>Searching for options... hang tight! This may take a moment.</p>
           </div>
         )}
-        
         {error && (
           <div className="text-center text-red-500 font-semibold mt-8">
             <p>{error}</p>
           </div>
         )}
-        
         {!isLoading && message && (
           <div className="text-center text-gray-500 italic mt-8">
             <p>{message}</p>
